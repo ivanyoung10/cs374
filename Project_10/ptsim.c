@@ -1,0 +1,216 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+#define MEM_SIZE 16384  // MUST equal PAGE_SIZE * PAGE_COUNT
+#define PAGE_SIZE 256  // MUST equal 2^PAGE_SHIFT
+#define PAGE_COUNT 64
+#define PAGE_SHIFT 8  // Shift page number this much
+
+#define PTP_OFFSET 64 // How far offset in page 0 is the page table pointer table
+
+// Simulated RAM
+unsigned char mem[MEM_SIZE];
+
+//
+// Convert a page,offset into an address
+//
+int get_address(int page, int offset)
+{
+    return (page << PAGE_SHIFT) | offset;
+}
+
+//
+// Initialize RAM
+//
+void initialize_mem(void)
+{
+    memset(mem, 0, MEM_SIZE);
+
+    int zpfree_addr = get_address(0, 0);
+    mem[zpfree_addr] = 1;  // Mark zero page as allocated
+}
+
+//
+// Get the page table page for a given process
+//
+unsigned char get_page_table(int proc_num)
+{
+    int ptp_addr = get_address(0, PTP_OFFSET + proc_num);
+    return mem[ptp_addr];
+}
+
+//
+// Allocate pages for a new process
+//
+// This includes the new process page table and page_count data pages.
+//
+void new_process(int proc_num, int page_count)
+{
+    int page_table_page = -1;
+
+    for (int counter = 1; counter < PAGE_COUNT; counter++){
+        if (mem[get_address(0, counter)] == 0){
+                page_table_page = counter;
+                mem[get_address(0, counter)] = 1;
+                break;
+        }
+
+    }
+
+    if (page_table_page == -1) {
+        printf("OOM: proc %d: page table\n", proc_num);
+        return;
+    }
+
+    mem[get_address(0, PTP_OFFSET + proc_num)] = page_table_page;
+
+    int page_allocated_num = 0;
+
+    for (int i = 1; i < PAGE_COUNT && page_allocated_num < page_count; i++) {
+        if (mem[get_address(0, i)] == 0) {
+            mem[get_address(0, i)] = 1;
+
+            int physical_addr = get_address(page_table_page, page_allocated_num);
+            mem[physical_addr] = i;
+
+            page_allocated_num++;
+        }
+    }
+}
+
+void kill_process(int proc_num) {
+    int page_table_page = get_page_table(proc_num);
+
+
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        int addr = get_address(page_table_page, i);
+        int page = mem[addr];
+
+        if (page != 0) {
+            mem[get_address(0, page)] = 0;
+            mem[addr] = 0;
+        }
+    }
+
+    mem[get_address(0, page_table_page)] = 0;
+}
+
+void store_value(int process, int address, int value) {
+    int page_table = get_page_table(process);
+
+    int page = mem[get_address(page_table, address / PAGE_SIZE)];
+    int offset = address % PAGE_SIZE;
+
+    int physical_addr = get_address(page, offset);
+
+    mem[physical_addr] = value;
+
+    printf("Store proc %d: %d => %d, value=%d\n",
+        process, address, physical_addr, value);
+}
+
+void load_address(int process, int virtual_addr){
+    int page_table = get_page_table(process);
+
+    int page = mem[get_address(page_table, virtual_addr / PAGE_SIZE)];
+    int offset = virtual_addr % PAGE_SIZE;
+
+    int physical_addr = get_address(page, offset);
+    int value = mem[physical_addr];
+
+    printf("Load proc %d: %d => %d, value=%d\n",
+        process, virtual_addr, physical_addr, value);
+}
+
+
+
+//
+// Print the free page map
+//
+// Don't modify this
+//
+void print_page_free_map(void)
+{
+    printf("--- PAGE FREE MAP ---\n");
+
+    for (int i = 0; i < 64; i++) {
+        int addr = get_address(0, i);
+
+        printf("%c", mem[addr] == 0? '.': '#');
+
+        if ((i + 1) % 16 == 0)
+            putchar('\n');
+    }
+}
+
+//
+// Print the address map from virtual pages to physical
+//
+// Don't modify this
+//
+void print_page_table(int proc_num)
+{
+    printf("--- PROCESS %d PAGE TABLE ---\n", proc_num);
+
+    // Get the page table for this process
+    int page_table = get_page_table(proc_num);
+
+    // Loop through, printing out used pointers
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        int addr = get_address(page_table, i);
+
+        int page = mem[addr];
+
+        if (page != 0) {
+            printf("%02x -> %02x\n", i, page);
+        }
+    }
+}
+
+//
+// Main -- process command line
+//
+int main(int argc, char *argv[])
+{
+    assert(PAGE_COUNT * PAGE_SIZE == MEM_SIZE);
+
+    if (argc == 1) {
+        fprintf(stderr, "usage: ptsim commands\n");
+        return 1;
+    }
+
+    initialize_mem();
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "pfm") == 0) {
+            print_page_free_map();
+        }
+        else if (strcmp(argv[i], "ppt") == 0) {
+            int proc_num = atoi(argv[++i]);
+            print_page_table(proc_num);
+        }
+
+        else if (strcmp(argv[i], "np") == 0) {
+            int proc_num = atoi(argv[++i]);
+            int page_count = atoi(argv[++i]);
+            new_process(proc_num, page_count);
+        }
+        else if (strcmp(argv[i], "kp") == 0) {
+            int proc_num = atoi(argv[++i]);
+            kill_process(proc_num);
+        }
+        else if (strcmp(argv[i], "sb") == 0){
+            int process = atoi(argv[++i]);
+            int address = atoi(argv[++i]);
+            int value = atoi(argv[++i]);
+            store_value(process, address, value);
+        }
+        else if (strcmp(argv[i], "lb") == 0) {
+            int process = atoi(argv[++i]);
+            int virtual_addr = atoi(argv[++i]);
+            load_address(process, virtual_addr);
+        }
+    }
+}
